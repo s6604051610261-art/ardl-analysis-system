@@ -1,279 +1,262 @@
-
-#ลองเอาไปแสดงผลในเว็ปไซต์
+# =========================
+# IMPORT
+# =========================
 import streamlit as st
+import pandas as pd
+import numpy as np
+import statsmodels.api as sm
 
-st.set_page_config(page_title="ARDL Analysis", layout="wide")
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
-st.title("📊ARDL Analysis System")
+from google import genai
 
-st.write("ระบบวิเคราะห์ ARDL และสร้างรายงานอัตโนมัติ")
+# =========================
+# PAGE SETUP
+# =========================
+st.set_page_config(
+    page_title="ARDL + ECM Analysis",
+    layout="wide"
+)
 
+st.title("📊 ARDL + ECM + Gemini AI System")
+
+# =========================
+# GEMINI API
+# =========================
+client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
+
+# =========================
+# UPLOAD FILE
+# =========================
 uploaded_file = st.file_uploader(
-    "Upload Excel File",
+    "📂 Upload Excel File",
     type=["xlsx"]
 )
 
-if uploaded_file is not None:
-    st.success("Upload สำเร็จ")
-    
-import pandas as pd
-if uploaded_file is not None:
+if uploaded_file is None:
+    st.info("กรุณาอัปโหลดไฟล์ Excel ก่อน")
+    st.stop()
 
+# =========================
+# READ DATA
+# =========================
+try:
     df = pd.read_excel(uploaded_file)
 
-    st.success("Upload สำเร็จ")
+except Exception as e:
+    st.error(f"ไม่สามารถอ่านไฟล์ได้\n\n{e}")
+    st.stop()
 
-    st.subheader("📄 Dataset Preview")
+# =========================
+# REQUIRED COLUMNS
+# =========================
+required_columns = [
+    "GDP",
+    "PIT",
+    "PGDP",
+    "MLR",
+    "CPIH",
+    "Wealth",
+    "RCP"
+]
 
-    st.dataframe(df.head())
+missing = [c for c in required_columns if c not in df.columns]
 
-st.subheader("📊 Dataset Information")
+if missing:
+    st.error(f"ไม่พบคอลัมน์ : {missing}")
+    st.stop()
 
-st.write(f"จำนวนข้อมูล : {df.shape[0]} แถว")
-st.write(f"จำนวนตัวแปร : {df.shape[1]} ตัว")
+# =========================
+# DATASET PREVIEW
+# =========================
+st.success("✅ Upload สำเร็จ")
 
-if st.button("🚀 Start Analysis"):
-    st.write("กำลังวิเคราะห์...")
+col1, col2 = st.columns(2)
 
+with col1:
+    st.metric("Rows", df.shape[0])
 
-# =====================================
-# 1. IMPORT LIBRARIES
-# =====================================
-import numpy as np
-import pandas as pd
-import statsmodels.api as sm
-import ollama
-import os
+with col2:
+    st.metric("Columns", df.shape[1])
 
-from reportlab.platypus import PageBreak, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from xml.sax.saxutils import escape
+st.subheader("📄 Dataset Preview")
+st.dataframe(df.head())
 
+st.subheader("📋 Dataset Information")
 
-# =====================================
-# 2. LOAD DATA
-# =====================================
-file_path = r"C:\Users\HP\Downloads\NXPO\ARDL_ECM_Sample_Data.xlsx"
-df = pd.read_excel(file_path)
-
-print("Data Loaded:", df.shape)
-print(df.head())
-
-
-# =====================================
-# 3. CREATE VARIABLES
-# =====================================
-
-# Real Disposable Income
-df["RDI"] = ((df["GDP"] - df["PIT"]) / df["PGDP"]) * 100
-
-# Inflation (YoY 4 quarters)
-df["INFE"] = ((df["CPIH"] - df["CPIH"].shift(4)) / df["CPIH"].shift(4)) * 100
-
-# Real Interest Rate
-df["RIR"] = df["MLR"] - df["INFE"]
-
-
-# =====================================
-# 4. LOG TRANSFORM (SAFE)
-# =====================================
-df["ln_RCP"] = np.log(df["RCP"].replace(0, np.nan))
-df["ln_RDI"] = np.log(df["RDI"].replace(0, np.nan))
-df["ln_Wealth"] = np.log(df["Wealth"].replace(0, np.nan))
-
-
-# =====================================
-# 5. LONG-RUN MODEL (OLS)
-# =====================================
-df_long = df.dropna().copy()
-
-X_long = sm.add_constant(df_long[["ln_RDI", "ln_Wealth", "RIR"]])
-y_long = df_long["ln_RCP"]
-
-longrun = sm.OLS(y_long, X_long).fit()
-# ===== ADD HERE =====
-longrun_df = pd.DataFrame({
-    "Variable": longrun.params.index,
-    "Coefficient": longrun.params.values,
-    "t-stat": longrun.tvalues.values,
-    "P-value": longrun.pvalues.values
-})
-print("\n================ LONG RUN ================\n")
-print(longrun.summary())
-
-
-# Residuals (ECM term)
-df_long["ecm"] = longrun.resid
-
-
-# =====================================
-# 6. SHORT-RUN MODEL (ECM)
-# =====================================
-df_long["dln_RCP"] = df_long["ln_RCP"].diff()
-df_long["dln_RDI"] = df_long["ln_RDI"].diff()
-
-df_long["dln_Wealth_l3"] = df_long["ln_Wealth"].shift(3).diff()
-df_long["dRIR_l1"] = df_long["RIR"].shift(1).diff()
-
-df_long["ecm_l1"] = df_long["ecm"].shift(1)
-
-df_short = df_long.dropna().copy()
-
-X_short = sm.add_constant(df_short[
-    ["dln_RDI", "dln_Wealth_l3", "dRIR_l1", "ecm_l1"]
-])
-
-y_short = df_short["dln_RCP"]
-
-shortrun = sm.OLS(y_short, X_short).fit(cov_type="HC0")
-
-# ===== ADD HERE =====
-shortrun_df = pd.DataFrame({
-    "Variable": shortrun.params.index,
-    "Coefficient": shortrun.params.values,
-    "t-stat": shortrun.tvalues.values,
-    "P-value": shortrun.pvalues.values
+info = pd.DataFrame({
+    "Column": df.columns,
+    "Type": df.dtypes.astype(str)
 })
 
-print("\n================ SHORT RUN ================\n")
-print(shortrun.summary())
+st.dataframe(info)
 
+# =========================
+# RUN BUTTON
+# =========================
+if st.button("🚀 Run ARDL Analysis"):
 
-# =====================================
-# 7. EXTRACT COEFFICIENTS
-# =====================================
-longrun_coef = longrun.params.to_string()
-shortrun_coef = shortrun.params.to_string()
+    with st.spinner("Running Analysis..."):
 
+        # =====================
+        # CREATE VARIABLES
+        # =====================
+        df["RDI"] = ((df["GDP"] - df["PIT"]) / df["PGDP"]) * 100
 
-# =====================================
-# 8. AI REPORT (OLLAMA)
-# =====================================
-prompt = f"""
-คุณคือผู้เชี่ยวชาญเศรษฐมิติ
+        df["INFE"] = (
+            (df["CPIH"] - df["CPIH"].shift(4))
+            / df["CPIH"].shift(4)
+        ) * 100
 
-ผล Long-run:
-{longrun_coef}
+        df["RIR"] = df["MLR"] - df["INFE"]
 
-ผล Short-run:
-{shortrun_coef}
+        df["ln_RCP"] = np.log(df["RCP"].replace(0, np.nan))
+        df["ln_RDI"] = np.log(df["RDI"].replace(0, np.nan))
+        df["ln_Wealth"] = np.log(df["Wealth"].replace(0, np.nan))
 
-กรุณาอธิบาย:
+        df_long = df.dropna().copy()
+
+        # =====================
+        # LONG RUN
+        # =====================
+        X_long = sm.add_constant(
+            df_long[
+                [
+                    "ln_RDI",
+                    "ln_Wealth",
+                    "RIR"
+                ]
+            ]
+        )
+
+        y_long = df_long["ln_RCP"]
+
+        longrun = sm.OLS(
+            y_long,
+            X_long
+        ).fit()
+
+        df_long["ecm"] = longrun.resid
+
+        longrun_df = pd.DataFrame({
+            "Variable": longrun.params.index,
+            "Coefficient": longrun.params.values,
+            "t-stat": longrun.tvalues.values,
+            "P-value": longrun.pvalues.values
+        })
+
+        st.subheader("📈 Long Run Results")
+        st.dataframe(longrun_df)
+
+        # =====================
+        # SHORT RUN
+        # =====================
+        df_long["dln_RCP"] = df_long["ln_RCP"].diff()
+
+        df_long["dln_RDI"] = df_long["ln_RDI"].diff()
+
+        df_long["ecm_l1"] = df_long["ecm"].shift(1)
+
+        df_short = df_long.dropna().copy()
+
+        X_short = sm.add_constant(
+            df_short[
+                [
+                    "dln_RDI",
+                    "ecm_l1"
+                ]
+            ]
+        )
+
+        y_short = df_short["dln_RCP"]
+
+        short_run = sm.OLS(
+            y_short,
+            X_short
+        ).fit()
+
+        shortrun_df = pd.DataFrame({
+            "Variable": short_run.params.index,
+            "Coefficient": short_run.params.values,
+            "t-stat": short_run.tvalues.values,
+            "P-value": short_run.pvalues.values
+        })
+
+        st.subheader("📉 Short Run Results")
+        st.dataframe(shortrun_df)
+
+        # =====================
+        # GEMINI
+        # =====================
+        prompt = f"""
+คุณคือผู้เชี่ยวชาญด้านเศรษฐมิติ
+
+Long Run Results
+
+{longrun_df.to_string(index=False)}
+
+Short Run Results
+
+{shortrun_df.to_string(index=False)}
+
+กรุณาอธิบาย
+
 1. ผลระยะยาว
 2. ผลระยะสั้น
-3. ECM meaning
-4. สรุปเศรษฐศาสตร์
-5. เขียนเป็นรายงานวิชาการภาษาไทย
+3. ความหมายของ ECM
+4. ข้อเสนอแนะเชิงเศรษฐศาสตร์
 """
 
-response = ollama.chat(
-    model="qwen3:4b",
-    messages=[{"role": "user", "content": prompt}]
-)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
 
-report_text = response["message"]["content"]
+        st.subheader("🤖 Gemini AI Interpretation")
+        st.write(response.text)
 
-print("\nAI REPORT GENERATED\n")
+        # =====================
+        # PDF
+        # =====================
+        pdf_path = "ARDL_Report.pdf"
 
+        doc = SimpleDocTemplate(pdf_path)
 
-# =====================================
-# 9. SAVE TXT (CLEAN)
-# =====================================
-txt_path = "ARDL_Report.txt"
+        styles = getSampleStyleSheet()
 
-with open(txt_path, "w", encoding="utf-8") as f:
-    f.write(report_text)
+        style = ParagraphStyle(
+            "normal",
+            parent=styles["BodyText"],
+            fontSize=11
+        )
 
-print("TXT saved:", txt_path)
-# helper function (ต้องอยู่ก่อนใช้)
-# =====================================
-from reportlab.lib import colors  # ต้องอยู่บนสุดของไฟล์ หรือก่อนใช้ฟังก์ชัน
+        elements = []
 
-def dataframe_to_table(df):
-    data = [df.columns.tolist()] + df.values.tolist()
+        elements.append(
+            Paragraph("<b>ARDL REPORT</b>", style)
+        )
 
-    table = Table(data)
+        elements.append(
+            Spacer(1, 20)
+        )
 
-    table.setStyle(TableStyle([
-        ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+        elements.append(
+            Paragraph(
+                response.text.replace("\n", "<br/>"),
+                style
+            )
+        )
 
-        ('FONTNAME', (0,0), (-1,-1), 'THSarabun'),
-        ('FONTSIZE', (0,0), (-1,-1), 12),
+        doc.build(elements)
 
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        with open(pdf_path, "rb") as f:
 
-        # 🔥 สีหัวตาราง
-        ('BACKGROUND', (0,0), (-1,0), colors.darkblue),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            st.download_button(
+                "📄 Download PDF Report",
+                data=f,
+                file_name="ARDL_Report.pdf",
+                mime="application/pdf"
+            )
 
-        # 🔥 สีพื้นทั้งตาราง
-        ('BACKGROUND', (0,1), (-1,-1), colors.whitesmoke),
-    ]))
-
-    return table
-# =====================================
-# 10. CREATE PDF (SAFE THAI FONT)
-# =====================================
-
-pdfmetrics.registerFont(
-    TTFont("THSarabun", r"C:\Users\HP\Downloads\NXPO\THSarabunNew.ttf")
-)
-
-doc = SimpleDocTemplate("ARDL_Report.pdf")
-
-styles = getSampleStyleSheet()
-
-title_style = ParagraphStyle(
-    "ThaiTitle",
-    parent=styles["Title"],
-    fontName="THSarabun",
-    fontSize=20,
-    leading=26
-)
-
-body_style = ParagraphStyle(
-    "ThaiBody",
-    parent=styles["BodyText"],
-    fontName="THSarabun",
-    fontSize=14,
-    leading=20
-)
-
-elements = []
-
-elements.append(Paragraph("รายงาน ARDL & ECM", title_style))
-elements.append(Spacer(1, 12))
-# =========================
-# 🔥 ใส่ตารางตรงนี้
-# =========================
-
-elements.append(Paragraph("ตารางผล Long-run Model", body_style))
-elements.append(Spacer(1, 6))
-elements.append(dataframe_to_table(longrun_df)) # type: ignore
-elements.append(Spacer(1, 12))
-
-elements.append(Paragraph("ตารางผล Short-run ECM Model", body_style))
-elements.append(Spacer(1, 6))
-elements.append(dataframe_to_table(shortrun_df)) # type: ignore
-elements.append(Spacer(1, 12))
-
-elements.append(PageBreak())
-
-safe_text = escape(report_text).replace("\n", "<br/>")
-
-elements.append(Paragraph(safe_text, body_style))
-
-doc.build(elements)
-
-print("PDF created: ARDL_Report.pdf")
-
-
-# =====================================
-# 11. OPEN PDF (WINDOWS ONLY)
-# =====================================
-pdf_path = os.path.abspath("ARDL_Report.pdf")
-os.startfile(pdf_path)
-
-print("DONE - ALL PROCESS COMPLETED")
+    st.success("✅ วิเคราะห์เสร็จเรียบร้อย")

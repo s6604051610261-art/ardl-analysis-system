@@ -6,3 +6,4 @@ statsmodels
 scipy
 matplotlib
 reportlab
+google-generativeai
