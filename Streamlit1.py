@@ -6,11 +6,18 @@ import pandas as pd
 import numpy as np
 import statsmodels.api as sm
 
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer
+)
 
-from google import genai
+from reportlab.lib.styles import (
+    getSampleStyleSheet,
+    ParagraphStyle
+)
 
+import google.generativeai as genai
 # =========================
 # PAGE SETUP
 # =========================
@@ -19,13 +26,21 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📊 ARDL + ECM + Gemini AI System")
+st.title(
+    "📊 ARDL + ECM + Gemini AI System"
+)
+
 
 # =========================
 # GEMINI API
 # =========================
-client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
+genai.configure(
+    api_key=st.secrets["GOOGLE_API_KEY"]
+)
 
+model = genai.GenerativeModel(
+    "gemini-1.5-flash"
+)
 # =========================
 # UPLOAD FILE
 # =========================
@@ -102,18 +117,35 @@ if st.button("🚀 Run ARDL Analysis"):
         # =====================
         # CREATE VARIABLES
         # =====================
-        df["RDI"] = ((df["GDP"] - df["PIT"]) / df["PGDP"]) * 100
+        df["RDI"] = (
+            (df["GDP"] - df["PIT"])
+            / df["PGDP"]
+        ) * 100
 
         df["INFE"] = (
-            (df["CPIH"] - df["CPIH"].shift(4))
+            (
+                df["CPIH"]
+                - df["CPIH"].shift(4)
+            )
             / df["CPIH"].shift(4)
         ) * 100
 
-        df["RIR"] = df["MLR"] - df["INFE"]
+        df["RIR"] = (
+            df["MLR"]
+            - df["INFE"]
+        )
 
-        df["ln_RCP"] = np.log(df["RCP"].replace(0, np.nan))
-        df["ln_RDI"] = np.log(df["RDI"].replace(0, np.nan))
-        df["ln_Wealth"] = np.log(df["Wealth"].replace(0, np.nan))
+        df["ln_RCP"] = np.log(
+            df["RCP"].replace(0, np.nan)
+        )
+
+        df["ln_RDI"] = np.log(
+            df["RDI"].replace(0, np.nan)
+        )
+
+        df["ln_Wealth"] = np.log(
+            df["Wealth"].replace(0, np.nan)
+        )
 
         df_long = df.dropna().copy()
 
@@ -137,28 +169,52 @@ if st.button("🚀 Run ARDL Analysis"):
             X_long
         ).fit()
 
-        df_long["ecm"] = longrun.resid
+        df_long["ecm"] = (
+            longrun.resid
+        )
 
         longrun_df = pd.DataFrame({
-            "Variable": longrun.params.index,
-            "Coefficient": longrun.params.values,
-            "t-stat": longrun.tvalues.values,
-            "P-value": longrun.pvalues.values
+            "Variable":
+                longrun.params.index,
+
+            "Coefficient":
+                longrun.params.values,
+
+            "t-stat":
+                longrun.tvalues.values,
+
+            "P-value":
+                longrun.pvalues.values
         })
 
-        st.subheader("📈 Long Run Results")
-        st.dataframe(longrun_df)
+        st.subheader(
+            "📈 Long Run Results"
+        )
+
+        st.dataframe(
+            longrun_df
+        )
 
         # =====================
         # SHORT RUN
         # =====================
-        df_long["dln_RCP"] = df_long["ln_RCP"].diff()
+        df_long["dln_RCP"] = (
+            df_long["ln_RCP"].diff()
+        )
 
-        df_long["dln_RDI"] = df_long["ln_RDI"].diff()
+        df_long["dln_RDI"] = (
+            df_long["ln_RDI"].diff()
+        )
 
-        df_long["ecm_l1"] = df_long["ecm"].shift(1)
+        df_long["ecm_l1"] = (
+            df_long["ecm"].shift(1)
+        )
 
-        df_short = df_long.dropna().copy()
+        df_short = (
+            df_long
+            .dropna()
+            .copy()
+        )
 
         X_short = sm.add_constant(
             df_short[
@@ -169,7 +225,9 @@ if st.button("🚀 Run ARDL Analysis"):
             ]
         )
 
-        y_short = df_short["dln_RCP"]
+        y_short = (
+            df_short["dln_RCP"]
+        )
 
         short_run = sm.OLS(
             y_short,
@@ -177,14 +235,26 @@ if st.button("🚀 Run ARDL Analysis"):
         ).fit()
 
         shortrun_df = pd.DataFrame({
-            "Variable": short_run.params.index,
-            "Coefficient": short_run.params.values,
-            "t-stat": short_run.tvalues.values,
-            "P-value": short_run.pvalues.values
+            "Variable":
+                short_run.params.index,
+
+            "Coefficient":
+                short_run.params.values,
+
+            "t-stat":
+                short_run.tvalues.values,
+
+            "P-value":
+                short_run.pvalues.values
         })
 
-        st.subheader("📉 Short Run Results")
-        st.dataframe(shortrun_df)
+        st.subheader(
+            "📉 Short Run Results"
+        )
+
+        st.dataframe(
+            shortrun_df
+        )
 
         # =====================
         # GEMINI
@@ -208,49 +278,79 @@ Short Run Results
 4. ข้อเสนอแนะเชิงเศรษฐศาสตร์
 """
 
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt
+        response = (
+            model.generate_content(
+                prompt
+            )
         )
 
-        st.subheader("🤖 Gemini AI Interpretation")
-        st.write(response.text)
+        st.subheader(
+            "🤖 Gemini AI Interpretation"
+        )
+
+        st.write(
+            response.text
+        )
 
         # =====================
         # PDF
         # =====================
-        pdf_path = "ARDL_Report.pdf"
+        pdf_path = (
+            "ARDL_Report.pdf"
+        )
 
-        doc = SimpleDocTemplate(pdf_path)
+        doc = (
+            SimpleDocTemplate(
+                pdf_path
+            )
+        )
 
-        styles = getSampleStyleSheet()
+        styles = (
+            getSampleStyleSheet()
+        )
 
         style = ParagraphStyle(
             "normal",
-            parent=styles["BodyText"],
+            parent=styles[
+                "BodyText"
+            ],
             fontSize=11
         )
 
         elements = []
 
         elements.append(
-            Paragraph("<b>ARDL REPORT</b>", style)
-        )
-
-        elements.append(
-            Spacer(1, 20)
-        )
-
-        elements.append(
             Paragraph(
-                response.text.replace("\n", "<br/>"),
+                "<b>ARDL REPORT</b>",
                 style
             )
         )
 
-        doc.build(elements)
+        elements.append(
+            Spacer(
+                1,
+                20
+            )
+        )
 
-        with open(pdf_path, "rb") as f:
+        elements.append(
+            Paragraph(
+                response.text.replace(
+                    "\n",
+                    "<br/>"
+                ),
+                style
+            )
+        )
+
+        doc.build(
+            elements
+        )
+
+        with open(
+            pdf_path,
+            "rb"
+        ) as f:
 
             st.download_button(
                 "📄 Download PDF Report",
@@ -259,4 +359,6 @@ Short Run Results
                 mime="application/pdf"
             )
 
-    st.success("✅ วิเคราะห์เสร็จเรียบร้อย")
+        st.success(
+            "✅ วิเคราะห์เสร็จเรียบร้อย"
+        ) 
